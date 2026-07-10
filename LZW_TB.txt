@@ -1,0 +1,78 @@
+`timescale 1ns/1ps
+
+module lzw_metrics_tb;
+    // Parameters matches the Top Module
+    localparam D_SIZE = 4096;
+    localparam A_WIDTH = 12;
+    localparam C_WIDTH = 8;
+
+    // DYNAMIC MEMORY CALCULATION
+    // Formula: (Address Width + Character Width) * Total Entries
+    localparam BITS_PER_ENTRY = A_WIDTH + C_WIDTH;
+    localparam TOTAL_BITS     = D_SIZE * BITS_PER_ENTRY;
+    localparam TOTAL_KB       = TOTAL_BITS / 8192.0; 
+
+    reg clk, rst_n, in_valid;
+    reg [7:0] in_char;
+    wire [11:0] out_code;
+    wire out_valid;
+
+    integer in_bits = 0;
+    integer out_bits = 0;
+    real start_t, end_t;
+
+    lzw_encoder #(D_SIZE, A_WIDTH, C_WIDTH) uut (
+        .clk(clk), .rst_n(rst_n), .in_char(in_char),
+        .in_valid(in_valid), .out_code(out_code), .out_valid(out_valid)
+    );
+
+    initial clk = 0;
+    always #5 clk = ~clk; // 100MHz Standard Clock
+
+    initial begin
+        rst_n = 0; in_valid = 0;
+        #25 rst_n = 1;
+        @(posedge clk);
+        
+        start_t = $realtime;
+        
+        // Input: SASTRA UNIVERSITY
+        send_string("SASTRA UNIVERSITY");
+
+        @(posedge clk) in_valid = 0;
+        repeat(5) @(posedge clk);
+        end_t = $realtime;
+
+        $display("\n==========================================");
+        $display("   NORMAL LZW PERFORMANCE REPORT");
+        $display("==========================================");
+        $display("Total Memory Usage : %0.2f KB", TOTAL_KB);
+        $display("Throughput         : %0.2f Mbps", (in_bits) / ((end_t - start_t)/1000.0));
+        $display("Compression Ratio  : %0.2f", (in_bits * 1.0) / out_bits);
+        $display("==========================================\n");
+        $finish;
+    end
+
+    // Utility tasks
+    task send_string(input [135:0] str);
+        integer i;
+        for (i = 16; i >= 0; i = i - 1) begin
+            send_byte(str[i*8 +: 8]);
+        end
+    endtask
+
+    task send_byte(input [7:0] b);
+        begin
+            @(posedge clk); #1;
+            in_char = b; in_valid = 1;
+            in_bits = in_bits + 8;
+        end
+    endtask
+
+    always @(posedge clk) begin
+        if (out_valid) begin
+            $display("Code: %d", out_code);
+            out_bits = out_bits + A_WIDTH;
+        end
+    end
+endmodule

@@ -1,0 +1,110 @@
+`timescale 1ns/1ps
+
+module plzw_top (
+    input wire clk,
+    input wire rst_n,
+    input wire [7:0] in_char,
+    input wire in_valid,
+    output reg [11:0] out_code,
+    output reg out_valid
+);
+
+    // Dictionary & Multi-level Cache
+    reg [19:0] dictionary [0:4095]; 
+    reg [11:0] dict_ptr;
+    reg [31:0] cache_L1, cache_L2; 
+    reg cache_L1_v, cache_L2_v;
+
+    // Declarations for internal matching logic
+    reg s2_found;
+    reg [11:0] s2_found_idx;
+    integer i;
+
+    // Pipeline Registers
+    reg [11:0] current_prefix;
+    reg first_char_done;
+    reg [7:0]  s1_char;
+    reg        s1_active;
+    reg [11:0] s2_prefix;
+    reg [7:0]  s2_char;
+    reg        s2_active;
+
+    // COMBINATIONAL BYPASS: Resolves the "83 83" stall issue
+    wire [11:0] bypass_p = (s2_active && s2_found) ? s2_found_idx : 
+                           (s2_active && !s2_found) ? {4'b0, s2_char} : 
+                            current_prefix;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dict_ptr <= 12'd256;
+            current_prefix <= 0;
+            first_char_done <= 0;
+            {cache_L1_v, cache_L2_v} <= 2'b0;
+            {s1_active, s2_active} <= 2'b0;
+            {out_valid, out_code} <= 13'b0;
+        end else begin
+
+            // STAGE 3: Dictionary Update & Output
+            if (s2_active) begin
+                if (s2_found) begin
+                    current_prefix <= s2_found_idx;
+                    out_valid <= 0;
+                end else begin
+                    out_code  <= s2_prefix;
+                    out_valid <= 1;
+                    if (dict_ptr < 4096) begin
+                        dictionary[dict_ptr] <= {s2_char, s2_prefix};
+                        cache_L2 <= cache_L1; cache_L2_v <= cache_L1_v;
+                        cache_L1 <= {dict_ptr, s2_char, s2_prefix}; cache_L1_v <= 1;
+                        dict_ptr <= dict_ptr + 1;
+                    end
+                    current_prefix <= {4'b0, s2_char};
+                end
+            end else if (!in_valid && first_char_done) begin
+                out_code <= current_prefix;
+                out_valid <= 1;
+                first_char_done <= 0;
+            end else begin
+                out_valid <= 0;
+            end
+
+            // STAGE 2: Dictionary Lookup
+            if (s1_active) begin
+                s2_char   <= s1_char;
+                s2_prefix <= bypass_p; // Using the bypass
+                s2_active <= 1;
+                s2_found = 0;
+                s2_found_idx = 0;
+                
+                // Cache Priority Lookup
+                if (cache_L1_v && cache_L1[19:0] == {s1_char, bypass_p}) begin
+                    s2_found = 1; s2_found_idx = cache_L1[31:20];
+                end else if (cache_L2_v && cache_L2[19:0] == {s1_char, bypass_p}) begin
+                    s2_found = 1; s2_found_idx = cache_L2[31:20];
+                end else begin
+                    for (i = 256; i < 4096; i = i + 1) begin
+                        if (i < dict_ptr && dictionary[i] == {s1_char, bypass_p}) begin
+                            s2_found = 1; s2_found_idx = i;
+                        end
+                    end
+                end
+            end else begin
+                s2_active <= 0;
+            end
+
+            // STAGE 1: Input Buffer
+            if (in_valid) begin
+                if (!first_char_done) begin
+                    current_prefix <= {4'b0, in_char};
+                    first_char_done <= 1;
+                    s1_active <= 0;
+                end else begin
+                    s1_char <= in_char;
+                    s1_active <= 1;
+                end
+            end else begin
+                s1_active <= 0;
+            end
+        end
+    end
+endmodule

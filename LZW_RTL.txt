@@ -1,0 +1,70 @@
+`timescale 1ns/1ps
+
+module lzw_encoder #(
+    parameter DICT_SIZE = 4096,
+    parameter ADDR_WIDTH = 12,
+    parameter CHAR_WIDTH = 8
+)(
+    input wire clk,
+    input wire rst_n,
+    input wire [CHAR_WIDTH-1:0] in_char,
+    input wire in_valid,
+    output reg [ADDR_WIDTH-1:0] out_code,
+    output reg out_valid
+);
+
+    // Dictionary Entry: Prefix (12 bits) + Character (8 bits) = 20 bits
+    localparam ENTRY_WIDTH = ADDR_WIDTH + CHAR_WIDTH;
+
+    reg [ENTRY_WIDTH-1:0] dictionary [0:DICT_SIZE-1];
+    reg [ADDR_WIDTH-1:0] dict_ptr;
+    reg [ADDR_WIDTH-1:0] current_prefix;
+    reg first_char_done;
+
+    // XOR Hash to find a dictionary index quickly
+    wire [ADDR_WIDTH-1:0] hash_index = current_prefix ^ {4'b0, in_char};
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dict_ptr <= 256; // Standard ASCII range
+            current_prefix <= 0;
+            first_char_done <= 0;
+            out_valid <= 0;
+            out_code <= 0;
+        end else begin
+            if (in_valid) begin
+                if (!first_char_done) begin
+                    current_prefix <= {4'b0, in_char};
+                    first_char_done <= 1;
+                    out_valid <= 0;
+                end else begin
+                    // Check if {Prefix + Char} exists in dictionary
+                    if (dictionary[hash_index] == {current_prefix, in_char}) begin
+                        current_prefix <= hash_index;
+                        out_valid <= 0;
+                    end else begin
+                        // Not found: Output existing prefix
+                        out_code <= current_prefix;
+                        out_valid <= 1;
+                        
+                        // Add new sequence to dictionary
+                        if (dict_ptr < DICT_SIZE) begin
+                            dictionary[hash_index] <= {current_prefix, in_char};
+                            dict_ptr <= dict_ptr + 1;
+                        end
+                        
+                        // New prefix starts with current char
+                        current_prefix <= {4'b0, in_char};
+                    end
+                end
+            end else if (first_char_done) begin
+                // Flush the final prefix
+                out_code <= current_prefix;
+                out_valid <= 1;
+                first_char_done <= 0;
+            end else begin
+                out_valid <= 0;
+            end
+        end
+    end
+endmodule
